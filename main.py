@@ -5,7 +5,6 @@ import uuid
 import logging
 import urllib3
 from datetime import datetime, timezone
-from pathlib import Path
 
 import requests
 
@@ -20,10 +19,18 @@ logger = logging.getLogger(__name__)
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID", "")
 GIGACHAT_CREDENTIALS = os.environ.get("GIGACHAT_CREDENTIALS", "")
-UNSPLASH_ACCESS_KEY = os.environ.get("UNSPLASH_ACCESS_KEY", "")
 
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 VERIFY_SSL = False
+
+# Список названий рубрики для циклической смены
+RUBRIC_TITLES = [
+    "🧠 Эко-викторина дня",
+    "🌿 Что ты знаешь о природе?",
+    "🦋🧩 Проверь свои знания",
+    "🌎✨ Факт дня о планете",
+    "🌱💡 Природный квиз"
+]
 
 # ──────────────────────── GigaChat Token ──────────────────────────
 
@@ -52,17 +59,20 @@ def get_gigachat_token() -> str | None:
         logger.error("❌ Ошибка получения токена GigaChat: %s", e)
         return None
 
-# ──────────────────────── Определение темы ────────────────────────
+# ──────────────────────── Определение темы и названия ─────────────
 
 def get_today_topic() -> str:
-    """Определяем тему по номеру дня в году (циклически)"""
+    """Определяем тему по номеру дня в году (циклически, 3 варианта)"""
     today = datetime.now(timezone.utc)
     day_of_year = today.timetuple().tm_yday
-    
     topics = ['природа', 'планеты', 'животные']
-    topic_index = day_of_year % 3
-    
-    return topics[topic_index]
+    return topics[day_of_year % 3]
+
+def get_today_title() -> str:
+    """Определяем название рубрики по номеру дня в году (циклически, 5 вариантов)"""
+    today = datetime.now(timezone.utc)
+    day_of_year = today.timetuple().tm_yday
+    return RUBRIC_TITLES[day_of_year % len(RUBRIC_TITLES)]
 
 # ──────────────────────── Генерация вопроса ───────────────────────
 
@@ -70,7 +80,7 @@ def generate_quiz_question(topic: str, access_token: str) -> dict | None:
     """Генерирует вопрос для викторины через GigaChat API"""
     
     if not access_token:
-        logger.error(" Нет токена для доступа к GigaChat")
+        logger.error("❌ Нет токена для доступа к GigaChat")
         return None
 
     prompt = f"""Ты — эксперт по {topic}. Создай ОДИН вопрос для викторины в Telegram.
@@ -82,14 +92,13 @@ def generate_quiz_question(topic: str, access_token: str) -> dict | None:
 4. Ровно 4 варианта ответа.
 5. Только один правильный ответ.
 6. Формулируй варианты ответа примерно одинаковой длины.
-7. В конце добавь поле image_keyword с одним ключевым словом на английском для поиска фото.
+7. Текст вопроса должен быть лаконичным (до 250 символов), чтобы вместе с заголовком рубрики не превысить лимит Telegram.
 
 ФОРМАТ ОТВЕТА (строго JSON без дополнительного текста, без markdown-оберток):
 {{
     "question": "Текст вопроса?",
     "options": ["Вариант А", "Вариант Б", "Вариант В", "Вариант Г"],
-    "correct_answer": "Точный текст правильного ответа из списка options",
-    "image_keyword": "elephant"
+    "correct_answer": "Точный текст правильного ответа из списка options"
 }}
 
 Тема: {topic}
@@ -135,57 +144,13 @@ def generate_quiz_question(topic: str, access_token: str) -> dict | None:
             return None
     
     except Exception as e:
-        logger.error(" Ошибка генерации вопроса через GigaChat: %s", e)
+        logger.error("❌ Ошибка генерации вопроса через GigaChat: %s", e)
         return None
 
-# ─────────────────────── Поиск фото на Unsplash ──────────────────
+# ──────────────────────── Отправка опроса ────────────────────────
 
-def search_photo_on_unsplash(keyword: str, topic: str) -> str | None:
-    """Ищет и скачивает фото с Unsplash по ключевому слову"""
-    
-    if not UNSPLASH_ACCESS_KEY:
-        logger.warning("⚠️ UNSPLASH_ACCESS_KEY не задан — пропускаем поиск фото")
-        return None
-    
-    # Используем keyword из вопроса или тему как fallback
-    search_query = keyword if keyword else topic
-    
-    url = "https://api.unsplash.com/photos/random"
-    params = {
-        "query": search_query,
-        "orientation": "landscape",
-        "client_id": UNSPLASH_ACCESS_KEY,
-    }
-    
-    try:
-        logger.info("🔍 Ищу фото на Unsplash по запросу: %s", search_query)
-        response = requests.get(url, params=params, timeout=15)
-        response.raise_for_status()
-        
-        data = response.json()
-        image_url = data["urls"]["regular"]
-        photographer = data["user"]["name"]
-        
-        # Скачиваем фото
-        img_response = requests.get(image_url, timeout=15)
-        img_response.raise_for_status()
-        
-        # Сохраняем во временный файл
-        temp_file = Path("temp_quiz_photo.jpg")
-        with open(temp_file, "wb") as f:
-            f.write(img_response.content)
-        
-        logger.info("✅ Фото загружено с Unsplash (автор: %s)", photographer)
-        return str(temp_file)
-    
-    except Exception as e:
-        logger.warning("⚠️ Ошибка загрузки фото с Unsplash: %s", e)
-        return None
-
-# ──────────────────────── Отправка опроса с фото ──────────────────
-
-def send_quiz_with_photo(quiz_data: dict, photo_path: str | None) -> bool:
-    """Отправляет опрос с фото или без в Telegram-канал"""
+def send_quiz_to_channel(quiz_data: dict, title: str) -> bool:
+    """Отправляет опрос в режиме викторины в Telegram-канал"""
     
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHANNEL_ID:
         logger.error("❌ TELEGRAM_BOT_TOKEN или TELEGRAM_CHANNEL_ID не заданы!")
@@ -198,51 +163,14 @@ def send_quiz_with_photo(quiz_data: dict, photo_path: str | None) -> bool:
                      quiz_data['correct_answer'])
         return False
     
-    # Формируем текст с вопросом для отправки с фото
-    question_text = f"🧩 <b>{quiz_data['question']}</b>\n\n"
-    
-    if photo_path and Path(photo_path).exists():
-        # Отправляем фото с подписью
-        url = f"{TELEGRAM_API}/sendPhoto"
-        
-        try:
-            with open(photo_path, "rb") as photo_file:
-                files = {"photo": photo_file}
-                data = {
-                    "chat_id": TELEGRAM_CHANNEL_ID,
-                    "caption": question_text,
-                    "parse_mode": "HTML",
-                }
-                
-                logger.info("📤 Отправляю фото с вопросом...")
-                resp = requests.post(url, files=files, data=data, timeout=30)
-                
-                if resp.status_code != 200:
-                    logger.error("❌ Ошибка отправки фото: %s", resp.text)
-                    # Продолжаем и отправляем только опрос
-        
-        except Exception as e:
-            logger.error("❌ Ошибка при отправке фото: %s", e)
-            # Продолжаем и отправляем только опрос
-        
-        finally:
-            # Удаляем временный файл
-            try:
-                Path(photo_path).unlink()
-            except:
-                pass
-    
-    # Отправляем опрос
-    return send_quiz_poll(quiz_data, correct_index)
-
-def send_quiz_poll(quiz_data: dict, correct_index: int) -> bool:
-    """Отправляет опрос в режиме викторины"""
+    # Добавляем название рубрики первой строкой к вопросу
+    final_question = f"{title}\n\n{quiz_data['question']}"
     
     url = f"{TELEGRAM_API}/sendPoll"
     
     payload = {
         "chat_id": TELEGRAM_CHANNEL_ID,
-        "question": quiz_data['question'],
+        "question": final_question,
         "options": quiz_data['options'],  
         "type": "quiz",
         "correct_option_id": correct_index,
@@ -252,7 +180,7 @@ def send_quiz_poll(quiz_data: dict, correct_index: int) -> bool:
     }
 
     try:
-        logger.info("📤 Отправляю опрос...")
+        logger.info("📤 Отправляю опрос в канал...")
         resp = requests.post(url, json=payload, timeout=30)
         
         if resp.status_code != 200:
@@ -277,9 +205,10 @@ def main():
         logger.error("🛑 Завершение работы: не удалось получить токен GigaChat.")
         sys.exit(1)
     
-    # 2. Определяем тему дня
+    # 2. Определяем тему дня и название рубрики
     topic = get_today_topic()
-    logger.info("📅 Сегодняшняя тема: %s", topic.upper())
+    title = get_today_title()
+    logger.info("📅 Сегодняшняя тема: %s | Рубрика: %s", topic.upper(), title)
     
     # 3. Генерируем вопрос
     quiz = generate_quiz_question(topic, access_token)
@@ -288,13 +217,8 @@ def main():
         logger.error("🛑 Завершение работы: не удалось сгенерировать вопрос.")
         sys.exit(1)
     
-    # 4. Ищем фото (если есть ключ Unsplash)
-    photo_path = None
-    image_keyword = quiz.get("image_keyword") if isinstance(quiz, dict) else None
-    photo_path = search_photo_on_unsplash(image_keyword, topic)
-    
-    # 5. Отправляем в Telegram (с фото или без)
-    success = send_quiz_with_photo(quiz, photo_path)
+    # 4. Отправляем опрос в Telegram (передаем title для добавления в начало)
+    success = send_quiz_to_channel(quiz, title)
     
     if success:
         logger.info("🎉 Миссия выполнена успешно!")
