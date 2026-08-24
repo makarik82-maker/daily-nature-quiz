@@ -182,61 +182,58 @@ def search_photo_on_unsplash(keyword: str, topic: str) -> str | None:
         logger.warning("⚠️ Ошибка загрузки фото с Unsplash: %s", e)
         return None
 
-# ──────────────────────── Отправка опроса с фото ──────────────────
+# ──────────────────────── Отправка фото с вопросом ────────────────
 
-def send_quiz_with_photo(quiz_data: dict, photo_path: str | None) -> bool:
-    """Отправляет опрос с фото или без в Telegram-канал"""
+def send_photo_with_question(quiz_data: dict, photo_path: str) -> bool:
+    """Отправляет фото с текстом вопроса"""
     
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHANNEL_ID:
         logger.error("❌ TELEGRAM_BOT_TOKEN или TELEGRAM_CHANNEL_ID не заданы!")
         return False
     
+    # Формируем текст с вопросом
+    caption = f"🧩 <b>Вопрос дня:</b>\n\n{quiz_data['question']}\n\n👇 <i>Голосуйте в опросе ниже!</i>"
+    
+    url = f"{TELEGRAM_API}/sendPhoto"
+    
     try:
-        correct_index = quiz_data['options'].index(quiz_data['correct_answer'])
-    except ValueError:
-        logger.error("❌ Правильный ответ '%s' не найден в списке вариантов", 
-                     quiz_data['correct_answer'])
+        with open(photo_path, "rb") as photo_file:
+            files = {"photo": photo_file}
+            data = {
+                "chat_id": TELEGRAM_CHANNEL_ID,
+                "caption": caption,
+                "parse_mode": "HTML",
+            }
+            
+            logger.info("📤 Отправляю фото с вопросом...")
+            resp = requests.post(url, files=files, data=data, timeout=30)
+            
+            if resp.status_code != 200:
+                logger.error("❌ Ошибка отправки фото: %s", resp.text)
+                return False
+            
+            logger.info("✅ Фото с вопросом отправлено!")
+            return True
+    
+    except Exception as e:
+        logger.error("❌ Ошибка при отправке фото: %s", e)
         return False
     
-    # Формируем текст с вопросом для отправки с фото
-    question_text = f"🧩 <b>{quiz_data['question']}</b>\n\n"
-    
-    if photo_path and Path(photo_path).exists():
-        # Отправляем фото с подписью
-        url = f"{TELEGRAM_API}/sendPhoto"
-        
+    finally:
+        # Удаляем временный файл
         try:
-            with open(photo_path, "rb") as photo_file:
-                files = {"photo": photo_file}
-                data = {
-                    "chat_id": TELEGRAM_CHANNEL_ID,
-                    "caption": question_text,
-                    "parse_mode": "HTML",
-                }
-                
-                logger.info("📤 Отправляю фото с вопросом...")
-                resp = requests.post(url, files=files, data=data, timeout=30)
-                
-                if resp.status_code != 200:
-                    logger.error("❌ Ошибка отправки фото: %s", resp.text)
-                    # Продолжаем и отправляем только опрос
-        
-        except Exception as e:
-            logger.error("❌ Ошибка при отправке фото: %s", e)
-            # Продолжаем и отправляем только опрос
-        
-        finally:
-            # Удаляем временный файл
-            try:
-                Path(photo_path).unlink()
-            except:
-                pass
-    
-    # Отправляем опрос
-    return send_quiz_poll(quiz_data, correct_index)
+            Path(photo_path).unlink()
+        except:
+            pass
+
+# ──────────────────────── Отправка опроса ────────────────────────
 
 def send_quiz_poll(quiz_data: dict, correct_index: int) -> bool:
     """Отправляет опрос в режиме викторины"""
+    
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHANNEL_ID:
+        logger.error("❌ TELEGRAM_BOT_TOKEN или TELEGRAM_CHANNEL_ID не заданы!")
+        return False
     
     url = f"{TELEGRAM_API}/sendPoll"
     
@@ -259,7 +256,7 @@ def send_quiz_poll(quiz_data: dict, correct_index: int) -> bool:
             logger.error("❌ Telegram API вернул ошибку: %s", resp.text)
             return False
         
-        logger.info("✅ Опрос успешно отправлен в канал!")
+        logger.info("✅ Опрос успешно отправлен!")
         return True
     
     except Exception as e:
@@ -288,13 +285,26 @@ def main():
         logger.error("🛑 Завершение работы: не удалось сгенерировать вопрос.")
         sys.exit(1)
     
-    # 4. Ищем фото (если есть ключ Unsplash)
+    # 4. Ищем фото
     photo_path = None
     image_keyword = quiz.get("image_keyword") if isinstance(quiz, dict) else None
     photo_path = search_photo_on_unsplash(image_keyword, topic)
     
-    # 5. Отправляем в Telegram (с фото или без)
-    success = send_quiz_with_photo(quiz, photo_path)
+    # 5. Находим индекс правильного ответа
+    try:
+        correct_index = quiz['options'].index(quiz['correct_answer'])
+    except ValueError:
+        logger.error(" Правильный ответ не найден в списке вариантов")
+        sys.exit(1)
+    
+    # 6. Отправляем фото с вопросом (если есть фото)
+    if photo_path and Path(photo_path).exists():
+        photo_success = send_photo_with_question(quiz, photo_path)
+        if not photo_success:
+            logger.warning("⚠️ Не удалось отправить фото, отправляю только опрос")
+    
+    # 7. Отправляем опрос (всегда)
+    success = send_quiz_poll(quiz, correct_index)
     
     if success:
         logger.info("🎉 Миссия выполнена успешно!")
