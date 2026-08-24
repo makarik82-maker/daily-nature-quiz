@@ -1,1 +1,33 @@
+name: Daily Nature Quiz
 
+on:
+  schedule:
+    # Запуск каждый день в 11:00 UTC (14:00 по Москве)
+    - cron: '0 11 * * *'
+  workflow_dispatch: # Позволяет запускать вручную для тестирования
+
+jobs:
+  send-quiz:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Run quiz script
+      env:
+        GIGACHAT_CREDENTIALS: ${{ secrets.GIGACHAT_CREDENTIALS }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+      run: |
+        python main.py
