@@ -1,2 +1,2 @@
-gigachat
+requests
 pyTelegramBotAPI
