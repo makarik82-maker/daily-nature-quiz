@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 import requests
 
-# Подавляем предупреждения о непроверенных HTTPS-запросах (нужно для API Сбера)
+# Подавляем предупреждения о непроверенных HTTPS-запросах
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ──────────────────────────── Настройки ───────────────────────────
@@ -68,7 +68,7 @@ def generate_quiz_question(topic: str, access_token: str) -> dict | None:
     """Генерирует вопрос для викторины через GigaChat API"""
     
     if not access_token:
-        logger.error("❌ Нет токена для доступа к GigaChat")
+        logger.error(" Нет токена для доступа к GigaChat")
         return None
 
     prompt = f"""Ты — эксперт по {topic}. Создай ОДИН вопрос для викторины в Telegram.
@@ -116,13 +116,12 @@ def generate_quiz_question(topic: str, access_token: str) -> dict | None:
         result = response.json()
         answer_text = result["choices"][0]["message"]["content"].strip()
         
-        # Очищаем ответ от возможных markdown-оберток ```json ... ```
+        # Очищаем ответ от возможных markdown-оберток
         if answer_text.startswith("```json"):
             answer_text = answer_text[7:-3].strip()
         elif answer_text.startswith("```"):
             answer_text = answer_text[3:-3].strip()
         
-        # Пробуем распарсить JSON
         try:
             quiz_data = json.loads(answer_text)
             logger.info("✅ Вопрос сгенерирован: '%s'", quiz_data.get("question", "")[:50])
@@ -144,7 +143,6 @@ def send_quiz_to_telegram(quiz_data: dict) -> bool:
         logger.error("❌ TELEGRAM_BOT_TOKEN или TELEGRAM_CHANNEL_ID не заданы!")
         return False
     
-    # Находим индекс правильного ответа
     try:
         correct_index = quiz_data['options'].index(quiz_data['correct_answer'])
     except ValueError:
@@ -154,34 +152,25 @@ def send_quiz_to_telegram(quiz_data: dict) -> bool:
     
     url = f"{TELEGRAM_API}/sendPoll"
     
-    # Формируем payload. options передается как обычный список Python, 
-    # библиотека requests сама превратит его в правильный JSON-массив.
+    # ВАЖНО: Для каналов Telegram опросы могут быть ТОЛЬКО анонимными!
     payload = {
         "chat_id": TELEGRAM_CHANNEL_ID,
         "question": quiz_data['question'],
         "options": quiz_data['options'],  
         "type": "quiz",
         "correct_option_id": correct_index,
-        "is_anonymous": False,
+        "is_anonymous": True,  # ← ОБЯЗАТЕЛЬНО True для каналов
         "explanation": f"✅ Правильный ответ: {quiz_data['correct_answer']}",
         "open_period": 7 * 24 * 60 * 60,  # Опрос открыт 7 дней
     }
 
     try:
-        logger.info("📤 Отправляю опрос в канал (ID: %s)...", TELEGRAM_CHANNEL_ID)
+        logger.info("📤 Отправляю опрос в канал...")
         
         resp = requests.post(url, json=payload, timeout=30)
         
         if resp.status_code != 200:
-            error_text = resp.text.lower()
             logger.error("❌ Telegram API вернул ошибку: %s", resp.text)
-            
-            # Специальная проверка на неправильный ID канала
-            if "chat not found" in error_text or "peer id invalid" in error_text or "bad request" in error_text:
-                logger.error("⚠️ ВНИМАНИЕ: Неверный TELEGRAM_CHANNEL_ID!")
-                logger.error("Для каналов ID должен быть числовым и начинаться с -100 (например: -1001234567890)")
-                logger.error("НЕ используйте @username канала в этом поле.")
-            
             return False
         
         logger.info("✅ Опрос успешно отправлен в канал!")
@@ -220,7 +209,7 @@ def main():
         logger.info("🎉 Миссия выполнена успешно!")
         sys.exit(0)
     else:
-        logger.error("🛑 Завершение работы с ошибкой отправки.")
+        logger.error(" Завершение работы с ошибкой отправки.")
         sys.exit(1)
 
 
