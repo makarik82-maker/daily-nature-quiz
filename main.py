@@ -4,7 +4,7 @@ from datetime import datetime
 from gigachat import GigaChat
 import telebot
 
-# Получаем ключи ТОЛЬКО из переменных окружения (GitHub Secrets)
+# Получаем ключи из переменных окружения (GitHub Secrets)
 GIGACHAT_CREDENTIALS = os.environ['GIGACHAT_CREDENTIALS']
 TELEGRAM_BOT_TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
 TELEGRAM_CHANNEL_ID = os.environ['TELEGRAM_CHANNEL_ID']
@@ -54,12 +54,37 @@ def generate_quiz_question(topic):
         print(answer_text)
         return None
 
-# Тестовый запуск (для отладки на GitHub Actions)
+def send_quiz_to_telegram(quiz_data):
+    """Отправляем опрос в Telegram-канал"""
+    
+    bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
+    
+    # Находим индекс правильного ответа
+    correct_index = quiz_data['options'].index(quiz_data['correct_answer'])
+    
+    # Отправляем опрос в режиме "Викторина"
+    bot.send_poll(
+        chat_id=TELEGRAM_CHANNEL_ID,
+        question=quiz_data['question'],
+        options=quiz_data['options'],
+        type='quiz',
+        correct_option_id=correct_index,
+        is_anonymous=False
+    )
+    
+    print("Опрос успешно отправлен в Telegram!")
+
+# Основной запуск
 if __name__ == "__main__":
     topic = get_today_topic()
     print(f"Сегодня тема: {topic}")
+    
     quiz = generate_quiz_question(topic)
+    
     if quiz:
+        print("Вопрос сгенерирован:")
         print(json.dumps(quiz, ensure_ascii=False, indent=2))
+        
+        send_quiz_to_telegram(quiz)
     else:
         print("Не удалось сгенерировать вопрос")
