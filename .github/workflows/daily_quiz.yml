@@ -29,5 +29,6 @@ jobs:
         GIGACHAT_CREDENTIALS: ${{ secrets.GIGACHAT_CREDENTIALS }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+        UNSPLASH_ACCESS_KEY: ${{ secrets.UNSPLASH_ACCESS_KEY }}  # ← Добавить эту строку
       run: |
         python main.py
