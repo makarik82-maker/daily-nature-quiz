@@ -5,14 +5,13 @@ import uuid
 import logging
 import urllib3
 from datetime import datetime, timezone
-from pathlib import Path
 
 import requests
 
-# Подавляем предупреждения о непроверенных HTTPS
+# Подавляем предупреждения о непроверенных HTTPS-запросах (нужно для API Сбера)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# ──────────────────────────── Настройки ──────────────────────────
+# ──────────────────────────── Настройки ───────────────────────────
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -24,12 +23,12 @@ GIGACHAT_CREDENTIALS = os.environ.get("GIGACHAT_CREDENTIALS", "")
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 VERIFY_SSL = False
 
-# ──────────────────────── GigaChat Token ─────────────────────────
+# ──────────────────────── GigaChat Token ──────────────────────────
 
 def get_gigachat_token() -> str | None:
     """Получает OAuth-токен GigaChat."""
     if not GIGACHAT_CREDENTIALS:
-        logger.error("GIGACHAT_CREDENTIALS не задан!")
+        logger.error("❌ GIGACHAT_CREDENTIALS не задан в секретах GitHub!")
         return None
     
     url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
@@ -45,16 +44,16 @@ def get_gigachat_token() -> str | None:
         response = requests.post(url, headers=headers, data=data, verify=VERIFY_SSL, timeout=30)
         response.raise_for_status()
         token = response.json().get("access_token")
-        logger.info("✅ Токен GigaChat получен успешно")
+        logger.info("✅ Токен GigaChat успешно получен")
         return token
     except Exception as e:
-        logger.error("Ошибка получения токена GigaChat: %s", e)
+        logger.error("❌ Ошибка получения токена GigaChat: %s", e)
         return None
 
 # ──────────────────────── Определение темы ────────────────────────
 
 def get_today_topic() -> str:
-    """Определяем тему по номеру дня в году"""
+    """Определяем тему по номеру дня в году (циклически)"""
     today = datetime.now(timezone.utc)
     day_of_year = today.timetuple().tm_yday
     
@@ -69,29 +68,29 @@ def generate_quiz_question(topic: str, access_token: str) -> dict | None:
     """Генерирует вопрос для викторины через GigaChat API"""
     
     if not access_token:
-        logger.error("Нет токена для доступа к GigaChat")
+        logger.error("❌ Нет токена для доступа к GigaChat")
         return None
 
     prompt = f"""Ты — эксперт по {topic}. Создай ОДИН вопрос для викторины в Telegram.
 
 ТРЕБОВАНИЯ:
-1. Вопрос должен быть основан ТОЛЬКО на реальных научных фактах
-2. Не придумывай несуществующие факты или данные
-3. Вопрос должен быть интересным, познавательным и не слишком очевидным
-4. Ровно 4 варианта ответа (a, b, c, d)
-5. Только один правильный ответ
-6. Формулируй варианты ответа примерно одинаковой длины
+1. Вопрос должен быть основан ТОЛЬКО на реальных научных фактах.
+2. Не придумывай несуществующие факты или данные.
+3. Вопрос должен быть интересным, познавательным и не слишком очевидным.
+4. Ровно 4 варианта ответа.
+5. Только один правильный ответ.
+6. Формулируй варианты ответа примерно одинаковой длины.
 
-ФОРМАТ ОТВЕТА (строго JSON без дополнительного текста):
+ФОРМАТ ОТВЕТА (строго JSON без дополнительного текста, без markdown-оберток):
 {{
-    "question": "текст вопроса",
-    "options": ["вариант A", "вариант B", "вариант C", "вариант D"],
-    "correct_answer": "точный текст правильного ответа из options"
+    "question": "Текст вопроса?",
+    "options": ["Вариант А", "Вариант Б", "Вариант В", "Вариант Г"],
+    "correct_answer": "Точный текст правильного ответа из списка options"
 }}
 
 Тема: {topic}
 
-Ответь ТОЛЬКО JSON, без пояснений и дополнительного текста."""
+Ответь ТОЛЬКО JSON."""
 
     url = "https://api.giga.chat/v1/chat/completions"
     headers = {
@@ -117,17 +116,23 @@ def generate_quiz_question(topic: str, access_token: str) -> dict | None:
         result = response.json()
         answer_text = result["choices"][0]["message"]["content"].strip()
         
+        # Очищаем ответ от возможных markdown-оберток ```json ... ```
+        if answer_text.startswith("```json"):
+            answer_text = answer_text[7:-3].strip()
+        elif answer_text.startswith("```"):
+            answer_text = answer_text[3:-3].strip()
+        
         # Пробуем распарсить JSON
         try:
             quiz_data = json.loads(answer_text)
-            logger.info("✅ Вопрос сгенерирован: %s", quiz_data.get("question", "")[:50])
+            logger.info("✅ Вопрос сгенерирован: '%s'", quiz_data.get("question", "")[:50])
             return quiz_data
         except json.JSONDecodeError:
-            logger.error("Не удалось распарсить JSON от GigaChat: %s", answer_text[:200])
+            logger.error("❌ Не удалось распарсить JSON от GigaChat. Ответ: %s", answer_text[:200])
             return None
     
     except Exception as e:
-        logger.error("Ошибка генерации вопроса через GigaChat: %s", e)
+        logger.error("❌ Ошибка генерации вопроса через GigaChat: %s", e)
         return None
 
 # ──────────────────────── Отправка опроса в Telegram ─────────────
@@ -136,35 +141,54 @@ def send_quiz_to_telegram(quiz_data: dict) -> bool:
     """Отправляет опрос в режиме викторины в Telegram-канал"""
     
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHANNEL_ID:
-        logger.error("TELEGRAM_BOT_TOKEN или TELEGRAM_CHANNEL_ID не заданы!")
+        logger.error("❌ TELEGRAM_BOT_TOKEN или TELEGRAM_CHANNEL_ID не заданы!")
         return False
     
     # Находим индекс правильного ответа
     try:
         correct_index = quiz_data['options'].index(quiz_data['correct_answer'])
     except ValueError:
-        logger.error("Правильный ответ не найден в списке вариантов!")
+        logger.error("❌ Правильный ответ '%s' не найден в списке вариантов: %s", 
+                     quiz_data['correct_answer'], quiz_data['options'])
         return False
     
     url = f"{TELEGRAM_API}/sendPoll"
+    
+    # Формируем payload. options передается как обычный список Python, 
+    # библиотека requests сама превратит его в правильный JSON-массив.
     payload = {
         "chat_id": TELEGRAM_CHANNEL_ID,
         "question": quiz_data['question'],
-        "options": json.dumps(quiz_data['options']),
+        "options": quiz_data['options'],  
         "type": "quiz",
         "correct_option_id": correct_index,
         "is_anonymous": False,
-        "explanation": f"Правильный ответ: {quiz_data['correct_answer']}",
+        "explanation": f"✅ Правильный ответ: {quiz_data['correct_answer']}",
+        "open_period": 7 * 24 * 60 * 60,  # Опрос открыт 7 дней
     }
 
     try:
+        logger.info("📤 Отправляю опрос в канал (ID: %s)...", TELEGRAM_CHANNEL_ID)
+        
         resp = requests.post(url, json=payload, timeout=30)
-        resp.raise_for_status()
-        logger.info("✅ Опрос успешно отправлен в %s", TELEGRAM_CHANNEL_ID)
+        
+        if resp.status_code != 200:
+            error_text = resp.text.lower()
+            logger.error("❌ Telegram API вернул ошибку: %s", resp.text)
+            
+            # Специальная проверка на неправильный ID канала
+            if "chat not found" in error_text or "peer id invalid" in error_text or "bad request" in error_text:
+                logger.error("⚠️ ВНИМАНИЕ: Неверный TELEGRAM_CHANNEL_ID!")
+                logger.error("Для каналов ID должен быть числовым и начинаться с -100 (например: -1001234567890)")
+                logger.error("НЕ используйте @username канала в этом поле.")
+            
+            return False
+        
+        logger.info("✅ Опрос успешно отправлен в канал!")
         return True
     
     except Exception as e:
-        logger.error("❌ Ошибка отправки опроса: %s", e)
+        logger.error("❌ Исключение при отправке опроса: %s", e)
         return False
 
 # ──────────────────────────── Main ─────────────────────────────────
@@ -172,27 +196,32 @@ def send_quiz_to_telegram(quiz_data: dict) -> bool:
 def main():
     logger.info("🚀 Запуск Daily Nature Quiz Bot — %s", datetime.now(timezone.utc).isoformat())
     
-    # Получаем токен GigaChat
+    # 1. Получаем токен GigaChat
     access_token = get_gigachat_token()
     if not access_token:
-        logger.error("Не удалось получить токен GigaChat. Завершение.")
+        logger.error("🛑 Завершение работы: не удалось получить токен GigaChat.")
         sys.exit(1)
     
-    # Определяем тему дня
+    # 2. Определяем тему дня
     topic = get_today_topic()
-    logger.info("📅 Сегодняшняя тема: %s", topic)
+    logger.info("📅 Сегодняшняя тема: %s", topic.upper())
     
-    # Генерируем вопрос
+    # 3. Генерируем вопрос
     quiz = generate_quiz_question(topic, access_token)
     
     if not quiz:
-        logger.error("Не удалось сгенерировать вопрос")
+        logger.error("🛑 Завершение работы: не удалось сгенерировать вопрос.")
         sys.exit(1)
     
-    # Отправляем в Telegram
+    # 4. Отправляем в Telegram
     success = send_quiz_to_telegram(quiz)
     
-    sys.exit(0 if success else 1)
+    if success:
+        logger.info("🎉 Миссия выполнена успешно!")
+        sys.exit(0)
+    else:
+        logger.error("🛑 Завершение работы с ошибкой отправки.")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
