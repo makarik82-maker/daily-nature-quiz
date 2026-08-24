@@ -70,7 +70,7 @@ def generate_quiz_question(topic: str, access_token: str) -> dict | None:
     """Генерирует вопрос для викторины через GigaChat API"""
     
     if not access_token:
-        logger.error("Нет токена для доступа к GigaChat")
+        logger.error(" Нет токена для доступа к GigaChat")
         return None
 
     prompt = f"""Ты — эксперт по {topic}. Создай ОДИН вопрос для викторины в Telegram.
@@ -82,14 +82,14 @@ def generate_quiz_question(topic: str, access_token: str) -> dict | None:
 4. Ровно 4 варианта ответа.
 5. Только один правильный ответ.
 6. Формулируй варианты ответа примерно одинаковой длины.
-7. В конце добавь строку IMAGE_KEYWORD: [одно ключевое слово на английском для поиска фото]
+7. В конце добавь поле image_keyword с одним ключевым словом на английском для поиска фото.
 
 ФОРМАТ ОТВЕТА (строго JSON без дополнительного текста, без markdown-оберток):
 {{
     "question": "Текст вопроса?",
     "options": ["Вариант А", "Вариант Б", "Вариант В", "Вариант Г"],
     "correct_answer": "Точный текст правильного ответа из списка options",
-    "image_keyword": "nature"
+    "image_keyword": "elephant"
 }}
 
 Тема: {topic}
@@ -135,16 +135,16 @@ def generate_quiz_question(topic: str, access_token: str) -> dict | None:
             return None
     
     except Exception as e:
-        logger.error("❌ Ошибка генерации вопроса через GigaChat: %s", e)
+        logger.error(" Ошибка генерации вопроса через GigaChat: %s", e)
         return None
 
-# ──────────────────────── Поиск фото на Unsplash ──────────────────
+# ─────────────────────── Поиск фото на Unsplash ──────────────────
 
 def search_photo_on_unsplash(keyword: str, topic: str) -> str | None:
     """Ищет и скачивает фото с Unsplash по ключевому слову"""
     
     if not UNSPLASH_ACCESS_KEY:
-        logger.warning("️ UNSPLASH_ACCESS_KEY не задан — пропускаем поиск фото")
+        logger.warning("⚠️ UNSPLASH_ACCESS_KEY не задан — пропускаем поиск фото")
         return None
     
     # Используем keyword из вопроса или тему как fallback
@@ -194,15 +194,15 @@ def send_quiz_with_photo(quiz_data: dict, photo_path: str | None) -> bool:
     try:
         correct_index = quiz_data['options'].index(quiz_data['correct_answer'])
     except ValueError:
-        logger.error(" Правильный ответ '%s' не найден в списке вариантов", 
+        logger.error("❌ Правильный ответ '%s' не найден в списке вариантов", 
                      quiz_data['correct_answer'])
         return False
     
     # Формируем текст с вопросом для отправки с фото
-    question_text = f" <b>{quiz_data['question']}</b>\n\n"
+    question_text = f"🧩 <b>{quiz_data['question']}</b>\n\n"
     
     if photo_path and Path(photo_path).exists():
-        # Отправляем фото с подписью и опросом
+        # Отправляем фото с подписью
         url = f"{TELEGRAM_API}/sendPhoto"
         
         try:
@@ -218,13 +218,12 @@ def send_quiz_with_photo(quiz_data: dict, photo_path: str | None) -> bool:
                 resp = requests.post(url, files=files, data=data, timeout=30)
                 
                 if resp.status_code != 200:
-                    logger.error(" Ошибка отправки фото: %s", resp.text)
-                    # Пробуем отправить без фото
-                    return send_quiz_without_photo(quiz_data)
+                    logger.error("❌ Ошибка отправки фото: %s", resp.text)
+                    # Продолжаем и отправляем только опрос
         
         except Exception as e:
             logger.error("❌ Ошибка при отправке фото: %s", e)
-            return send_quiz_without_photo(quiz_data)
+            # Продолжаем и отправляем только опрос
         
         finally:
             # Удаляем временный файл
@@ -235,27 +234,6 @@ def send_quiz_with_photo(quiz_data: dict, photo_path: str | None) -> bool:
     
     # Отправляем опрос
     return send_quiz_poll(quiz_data, correct_index)
-
-def send_quiz_without_photo(quiz_data: dict) -> bool:
-    """Отправляет вопрос текстом + опрос (fallback)"""
-    logger.info("📤 Отправляю вопрос текстом (без фото)...")
-    
-    url = f"{TELEGRAM_API}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHANNEL_ID,
-        "text": f"🧩 <b>{quiz_data['question']}</b>",
-        "parse_mode": "HTML",
-    }
-    
-    try:
-        resp = requests.post(url, json=payload, timeout=30)
-        if resp.status_code != 200:
-            logger.error("❌ Ошибка отправки текста: %s", resp.text)
-            return False
-        return True
-    except Exception as e:
-        logger.error("❌ Ошибка: %s", e)
-        return False
 
 def send_quiz_poll(quiz_data: dict, correct_index: int) -> bool:
     """Отправляет опрос в режиме викторины"""
@@ -307,12 +285,12 @@ def main():
     quiz = generate_quiz_question(topic, access_token)
     
     if not quiz:
-        logger.error(" Завершение работы: не удалось сгенерировать вопрос.")
+        logger.error("🛑 Завершение работы: не удалось сгенерировать вопрос.")
         sys.exit(1)
     
     # 4. Ищем фото (если есть ключ Unsplash)
     photo_path = None
-    image_keyword = quiz_data.get("image_keyword") if isinstance(quiz_data, dict) else None
+    image_keyword = quiz.get("image_keyword") if isinstance(quiz, dict) else None
     photo_path = search_photo_on_unsplash(image_keyword, topic)
     
     # 5. Отправляем в Telegram (с фото или без)
@@ -322,7 +300,7 @@ def main():
         logger.info("🎉 Миссия выполнена успешно!")
         sys.exit(0)
     else:
-        logger.error(" Завершение работы с ошибкой отправки.")
+        logger.error("🛑 Завершение работы с ошибкой отправки.")
         sys.exit(1)
 
 
